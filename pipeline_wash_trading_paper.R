@@ -12,7 +12,7 @@ library(Rcpp)
 library(hash)
 
 # SOURCE NECESSARY FILES
-sourceCpp(file = "volume_matching.cpp")
+sourceCpp(file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/volume_matching.cpp")
 
 # GLOBAL CONSTANTS AND VARIABLES
 global_ether_id <- "0x0000000000000000000000000000000000000000"
@@ -257,9 +257,9 @@ get_scc <- function(window_trades) {
   tx_sum_dollar <- numeric()
   
   # per relevant SCC (of size > 1):
-  for (i in interesting_scc_ids) {
+  for (j in interesting_scc_ids) {
     # get trader names
-    named_vertices <- names(which(window_scc$members == i))
+    named_vertices <- names(which(window_scc$members == j))
     # add number of traders to result set
     num_traders <- c(num_traders, length(named_vertices))
     # get trades belonging to this SCC
@@ -754,6 +754,84 @@ call_EtherDelta_pipeline <- function(EtherDeltaTrades_file = "data/EtherDeltaTra
   return()
 }
 
+
+call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/test.csv",
+                                   output_folder = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/output_PREPARED",
+                                   scc_threshold_rank = 100,
+                                   wash_trade_detection_ether = FALSE,   # << we analyze TOKEN amounts
+                                   wash_trade_detection_margin = 0.01,   # << paper’s tighter margin
+                                   wash_window_sizes_seconds = c(3600, 86400, 604800)) {
+  
+  dir.create(output_folder, showWarnings = FALSE, recursive = TRUE)
+  
+  # 1) Load your already-prepared, post-merge trades
+  trades <- load_trades(file_csv = Prepared_file)
+  
+  # Ensure essential columns exist (light sanity checks)
+  req <- c("timestamp","cut","blockNumber","transactionHash",
+           "eth_buyer","eth_seller","token",
+           "trade_amount_token","trade_amount_dollar")
+  if (!all(req %in% colnames(trades))) {
+    stop(paste("Prepared file missing required columns. Need:", paste(req, collapse=", ")))
+  }
+  
+  # 2) (Optional) You can still filter self-trades and summarize them
+  l <- filter_self_trades(trades = trades, save = TRUE, folder = output_folder)
+  self_trades <- l[["self_trades"]]
+  self_trades_summary <- summarize_self_trades(self_trades = self_trades, save = TRUE, folder = output_folder)
+  trades <- l[["non_self_trades"]]
+  
+  # 3) Add trader IDs
+  trades <- add_trader_hashes(trades = trades)
+  
+  # 4) Layered SCC detection (Algorithm 1)
+  scc_dt <- detect_scc_for_tokens_layered(trades = trades, save = TRUE, folder = output_folder)
+  
+  # 5) Pick relevant SCCs by occurrence
+  relevant_scc_ids <- get_relevant_scc_by_threshold(scc_dt, scc_threshold_rank)
+  
+  # 6) Multi-pass wash labeling (Algorithm 2) — TOKEN amounts
+  wash_trades_multiple_passes <- detect_and_label_wash_trades_for_scc_using_multiple_passes(
+    trades = trades,
+    relevant_scc = relevant_scc_ids,
+    window_sizes_in_seconds = wash_window_sizes_seconds,
+    ether = wash_trade_detection_ether,   # FALSE ⇒ use trade_amount_token
+    margin = wash_trade_detection_margin,
+    save = TRUE,
+    folder = output_folder
+  )
+  
+  trades_labeled <- wash_trades_multiple_passes[[2]]
+  wash_trades_multiple_passes <- wash_trades_multiple_passes[[1]]
+  
+  # 7) Summary CSV
+  wash_trades_multiple_passes_summary <- get_summary_of_wash_trades_per_scc_and_timewindow(
+    wash_trades = wash_trades_multiple_passes,
+    window_size_name = "multiple_windows",
+    multiple_passes = TRUE,
+    save = TRUE,
+    folder = output_folder
+  )
+  
+  # 8) Export address clusters for those SCCs
+  get_address_clusters(trades = trades,
+                       scc_ids = relevant_scc_ids,
+                       save = TRUE,
+                       folder = output_folder)
+  
+  invisible(NULL)
+}
+
+
+
+
+# call_PREPARED_pipeline()
+
+
+
+# call_PREPARED_pipeline(scc_threshold_rank = 3, wash_trade_detection_ether = FALSE, wash_trade_detection_margin = 0.01)
+
+
 #### MAIN CALL ####
 
 # parse arguments
@@ -762,8 +840,6 @@ option_list <- list(
               help="name of DEX, must be either 'IDEX' or 'EtherDelta' [default= %default]"),
   make_option(c("-t", "--trades"), type="character", default="data/IDEXTrades-preprocessed.csv", 
               help="trade dataset file name [default= %default]"),
-  make_option(c("-p", "--prices"), type="character", default="data/EtherDollarPrice.csv", 
-              help="Ether-Dollar-Price file name [default= %default]"),
   make_option(c("-o", "--output"), type="character", default="output_IDEX", 
               help="output folder name [default= %default]"),
   make_option(c("--sccthresholdrank"), type="integer", default=100, 
@@ -792,17 +868,8 @@ if (!is.null(opt$washwindowsizesecondspass3)) {
 }
 
 # call IDEX or EtherDelta pipeline
-if (opt$dex == "IDEX") {
-  call_IDEX_pipeline(IDEXtrades_file = opt$trades,
-                     EtherDollarPrice_file = opt$prices,
-                     output_folder = opt$output,
-                     scc_threshold_rank = opt$sccthresholdrank,
-                     wash_trade_detection_ether = opt$washdetectionether,
-                     wash_trade_detection_margin = opt$margin,
-                     wash_window_sizes_seconds = wash_window_sizes_args)
-} else if (opt$dex == "EtherDelta") {
-  call_EtherDelta_pipeline(EtherDeltaTrades_file = opt$trades,
-                           EtherDollarPrice_file = opt$prices,
+if (opt$dex == "HyperLiquid") {
+  call_EtherDelta_pipeline(Prepared_file = opt$trades,
                            output_folder = opt$output,
                            scc_threshold_rank = opt$sccthresholdrank,
                            wash_trade_detection_ether = opt$washdetectionether,
