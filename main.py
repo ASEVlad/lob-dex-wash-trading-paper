@@ -10,7 +10,7 @@ from src.DataReformator import prepare_postmerge_csv
 # ========= CONFIG =========
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / ".." / "data"
-R_SCRIPT_PATH = Path("pipeline_wash_trading_paper.R").expanduser()
+R_SCRIPT_PATH = Path("pipeline_wash_trading_paper_enhanced.R").expanduser()
 OUTPUT_BASE = BASE_DIR / ".." / "output_r_pipeline"
 OUTPUT_BASE.mkdir(parents=True, exist_ok=True)
 

@@ -865,7 +865,7 @@ if (!is.null(opt$washwindowsizesecondspass3)) {
 }
 
 
-# call IDEX or EtherDelta pipeline
+# call pipeline
 if (opt$dex == "HyperLiquid") {
   call_HyperLiquid_pipeline(Prepared_file = opt$trades,
                             output_folder = opt$output,
@@ -873,3 +873,4 @@ if (opt$dex == "HyperLiquid") {
                             wash_trade_detection_ether = opt$washdetectionether,
                             wash_trade_detection_margin = opt$margin,
                             wash_window_sizes_seconds = wash_window_sizes_args)
+}
