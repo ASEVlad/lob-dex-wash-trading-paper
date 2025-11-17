@@ -12,7 +12,7 @@ library(Rcpp)
 library(hash)
 
 # SOURCE NECESSARY FILES
-sourceCpp(file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/volume_matching.cpp")
+sourceCpp(file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/volume_matching_enhanced.cpp")
 
 # GLOBAL CONSTANTS AND VARIABLES
 global_ether_id <- "0x0000000000000000000000000000000000000000"
@@ -49,7 +49,7 @@ get_successful_and_complete_trades <- function(trades, status_column, status_suc
   }
   trades <- trades[complete.cases(trades)]
   print(paste0("Info: dropped ", (n - nrow(trades)), " rows, which had missing/unsuccessful status, ",
-             "or any missing values. ", nrow(trades), " rows remaining."))
+               "or any missing values. ", nrow(trades), " rows remaining."))
   return(trades)
 }
 
@@ -60,7 +60,7 @@ get_ether_token_trades <- function(trades, token_column1, token_column2) {
   trades <- trades[eval(token_column1) == global_ether_id | eval(token_column2) == global_ether_id]
   trades <- trades[eval(token_column1) != eval(token_column2)]
   print(paste0("Info: dropped ", (n - nrow(trades)), " rows, which are trades between two tokens or ",
-             "trades between the same currency. ", nrow(trades), " rows remaining."))
+               "trades between the same currency. ", nrow(trades), " rows remaining."))
   return(trades)
 }
 
@@ -168,7 +168,7 @@ filter_self_trades <- function(trades, save = TRUE, folder = "output", filename 
   self_trades <- trades[eth_buyer == eth_seller]
   non_self_trades <- trades[eth_buyer != eth_seller]
   print(paste0("Info: filtered ", nrow(self_trades), " self-trades. ",
-             nrow(non_self_trades), " non-self-trades remaining."))
+               nrow(non_self_trades), " non-self-trades remaining."))
   if(save) {
     # remove file type if given
     filename <- gsub("\\..*", "", filename)
@@ -283,7 +283,7 @@ get_scc <- function(window_trades) {
       if(exists_hash(x = hash_key, 
                      envir = get(global_hash_env_names[[i]], envir = globalenv()))) {
         hash_value <- get_hash(x = hash_key, 
-                      envir = get(global_hash_env_names[[i]], envir = globalenv()))
+                               envir = get(global_hash_env_names[[i]], envir = globalenv()))
         # add known SCC ID to result set
         scc_hashes <- c(scc_hashes, hash_value)
         found_scc <- T
@@ -315,7 +315,7 @@ get_scc <- function(window_trades) {
 
 # assumption: tumbling window
 detect_scc_for_token_and_time_window <- function(trades, window_size_in_seconds, window_size_name, window_start = NULL,
-                                                save = TRUE, folder = "output", filename = "scc") {
+                                                 save = TRUE, folder = "output", filename = "scc") {
   # if window start is not given, take start of first day of given trades
   if(missing(window_start)) {
     window_start <- min(trades$cut)
@@ -477,8 +477,10 @@ detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, r
       temp_trades_per_token_and_window <- split(temp_trades, list(temp_trades$token, 
                                                                   cut(temp_trades$timestamp, breaks, right = F, include.lowest = T, dig.lab = 12)), 
                                                 drop = TRUE)
+
+      
       scc.wash_trades_all <- lapply(temp_trades_per_token_and_window,
-                                    FUN = detect_label_wash_trades,
+                                    FUN = detect_label_wash_trades_all_windows,
                                     margin = margin)
       # add to final result
       wash_trades[[scc.id]][[as.character(window_size)]] <- scc.wash_trades_all
@@ -650,8 +652,8 @@ call_IDEX_pipeline <- function(IDEXtrades_file = "data/IDEX-preprocessed.csv",
                                                status_column = quote(status), 
                                                status_success = 1)
   trades <- get_ether_token_trades(trades = trades, 
-                                    token_column1 = quote(tokenBuy), 
-                                    token_column2 = quote(tokenSell))
+                                   token_column1 = quote(tokenBuy), 
+                                   token_column2 = quote(tokenSell))
   trades <- merge_trades_with_daily_usd_price(trades = trades,
                                               price_file_csv = EtherDollarPrice_file)
   
@@ -710,8 +712,8 @@ call_EtherDelta_pipeline <- function(EtherDeltaTrades_file = "data/EtherDeltaTra
   trades <- load_trades(file_csv = EtherDeltaTrades_file)
   trades <- get_successful_and_complete_trades(trades = trades)
   trades <- get_ether_token_trades(trades = trades,
-                                    token_column1 = quote(tokenBuy),
-                                    token_column2 = quote(tokenSell))
+                                   token_column1 = quote(tokenBuy),
+                                   token_column2 = quote(tokenSell))
   trades <- merge_EtherDelta_trades_with_daily_usd_price(trades = trades,
                                                          price_file_csv = EtherDollarPrice_file)
   
@@ -755,12 +757,13 @@ call_EtherDelta_pipeline <- function(EtherDeltaTrades_file = "data/EtherDeltaTra
 }
 
 
+
 call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/test.csv",
-                                   output_folder = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/output_PREPARED",
-                                   scc_threshold_rank = 100,
-                                   wash_trade_detection_ether = FALSE,   # << we analyze TOKEN amounts
-                                   wash_trade_detection_margin = 0.01,   # << paper’s tighter margin
-                                   wash_window_sizes_seconds = c(3600, 86400, 604800)) {
+                                      output_folder = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/output_PREPARED",
+                                      scc_threshold_rank = 100,
+                                      wash_trade_detection_ether = FALSE,   # << we analyze TOKEN amounts
+                                      wash_trade_detection_margin = 0.01,   # << paper’s tighter margin
+                                      wash_window_sizes_seconds = c(3600, 86400, 604800)) {
   
   dir.create(output_folder, showWarnings = FALSE, recursive = TRUE)
   
@@ -825,12 +828,6 @@ call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_as
 
 
 
-# call_HyperLiquid_pipeline(Prepared_file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/AVAX_test_compatible_trades.csv")
-
-
-
-# call_HyperLiquid_pipeline(Prepared_file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/test.csv", scc_threshold_rank = 1, wash_trade_detection_ether = FALSE, wash_trade_detection_margin = 0.01)
-
 
 #### MAIN CALL ####
 
@@ -871,9 +868,8 @@ if (!is.null(opt$washwindowsizesecondspass3)) {
 # call IDEX or EtherDelta pipeline
 if (opt$dex == "HyperLiquid") {
   call_HyperLiquid_pipeline(Prepared_file = opt$trades,
-                           output_folder = opt$output,
-                           scc_threshold_rank = opt$sccthresholdrank,
-                           wash_trade_detection_ether = opt$washdetectionether,
-                           wash_trade_detection_margin = opt$margin,
-                           wash_window_sizes_seconds = wash_window_sizes_args)
-}
+                            output_folder = opt$output,
+                            scc_threshold_rank = opt$sccthresholdrank,
+                            wash_trade_detection_ether = opt$washdetectionether,
+                            wash_trade_detection_margin = opt$margin,
+                            wash_window_sizes_seconds = wash_window_sizes_args)

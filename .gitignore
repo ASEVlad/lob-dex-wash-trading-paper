@@ -40,3 +40,6 @@ vignettes/*.pdf
 
 output_PREPARED
 .idea
+output_PREPARED_t
+*.csv
+*.log

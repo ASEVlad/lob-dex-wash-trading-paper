@@ -67,6 +67,9 @@ def main():
 
     for token in tokens:
         try:
+            if token != "AVAX":
+                continue
+
             logger.info(f"=== Processing token: {token} ===")
 
             store = CoinDataStore(token, engine="fastparquet")
