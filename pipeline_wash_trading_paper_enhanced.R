@@ -8,6 +8,7 @@ library(data.table)
 library(igraph)
 library(rjson)
 library(Rcpp)
+library(parallel)
 
 library(hash)
 
@@ -477,11 +478,11 @@ detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, r
       temp_trades_per_token_and_window <- split(temp_trades, list(temp_trades$token, 
                                                                   cut(temp_trades$timestamp, breaks, right = F, include.lowest = T, dig.lab = 12)), 
                                                 drop = TRUE)
-
       
-      scc.wash_trades_all <- lapply(temp_trades_per_token_and_window,
+      scc.wash_trades_all <- mclapply(temp_trades_per_token_and_window,
                                     FUN = detect_label_wash_trades_all_windows,
-                                    margin = margin)
+                                    margin = margin,
+                                    mc.cores = 14)
       # add to final result
       wash_trades[[scc.id]][[as.character(window_size)]] <- scc.wash_trades_all
       # label wash trades in original trade set
@@ -635,129 +636,6 @@ get_window_size_name <- function(seconds) {
 
 
 #### DEFINE ENTIRE PIPELINE ####
-call_IDEX_pipeline <- function(IDEXtrades_file = "data/IDEX-preprocessed.csv",
-                               EtherDollarPrice_file = "data/EtherDollarPrice.csv", 
-                               output_folder = "output_IDEX",
-                               scc_threshold_rank = 100,
-                               wash_trade_detection_ether = TRUE,
-                               wash_trade_detection_margin = 0.1,
-                               wash_window_sizes_seconds = c(60*60*24*7)) {
-  
-  # create directory for output
-  dir.create(output_folder)
-  
-  # load and prepare IDEX trades
-  trades <- load_trades(file_csv = IDEXtrades_file)
-  trades <- get_successful_and_complete_trades(trades = trades, 
-                                               status_column = quote(status), 
-                                               status_success = 1)
-  trades <- get_ether_token_trades(trades = trades, 
-                                   token_column1 = quote(tokenBuy), 
-                                   token_column2 = quote(tokenSell))
-  trades <- merge_trades_with_daily_usd_price(trades = trades,
-                                              price_file_csv = EtherDollarPrice_file)
-  
-  # filter self trades
-  l <- filter_self_trades(trades = trades,
-                          save = TRUE,
-                          folder = output_folder)
-  self_trades <- l[["self_trades"]]
-  self_trades_summary <- summarize_self_trades(self_trades = self_trades,
-                                               save = TRUE,
-                                               folder = output_folder)
-  trades <- l[["non_self_trades"]]
-  
-  # detect SCC
-  trades <- add_trader_hashes(trades = trades)
-  scc_dt <- detect_scc_for_tokens_layered(trades = trades, save = TRUE, folder = output_folder)
-  
-  relevant_scc_ids <- get_relevant_scc_by_threshold(scc_dt, scc_threshold_rank)
-  
-  wash_trades_multiple_passes <- detect_and_label_wash_trades_for_scc_using_multiple_passes(trades = trades,
-                                                                                            relevant_scc = relevant_scc_ids,
-                                                                                            window_sizes_in_seconds = wash_window_sizes_seconds,
-                                                                                            ether = wash_trade_detection_ether,
-                                                                                            margin = wash_trade_detection_margin,
-                                                                                            save = TRUE,
-                                                                                            folder = output_folder)
-  trades_labeled <- wash_trades_multiple_passes[[2]]
-  wash_trades_multiple_passes <- wash_trades_multiple_passes[[1]]
-  wash_trades_multiple_passes_summary <- get_summary_of_wash_trades_per_scc_and_timewindow(wash_trades = wash_trades_multiple_passes,
-                                                                                           window_size_name = "multiple_windows",
-                                                                                           multiple_passes = TRUE,
-                                                                                           save = TRUE,
-                                                                                           folder = output_folder)
-  
-  # get address clusters
-  get_address_clusters(trades = trades,
-                       scc_ids = relevant_scc_ids,
-                       save = TRUE,
-                       folder = output_folder)
-  
-  return()
-}
-
-call_EtherDelta_pipeline <- function(EtherDeltaTrades_file = "data/EtherDeltaTrades-preprocessed.csv",
-                                     EtherDollarPrice_file = "data/EtherDollarPrice.csv", 
-                                     output_folder = "output_EtherDelta",
-                                     scc_threshold_rank = 100,
-                                     wash_trade_detection_ether = TRUE,
-                                     wash_trade_detection_margin = 0.1,
-                                     wash_window_sizes_seconds = c(60*60*24*7)) {
-  
-  # create directory for output
-  dir.create(output_folder)
-  
-  # load and prepare EtherDelta trades
-  trades <- load_trades(file_csv = EtherDeltaTrades_file)
-  trades <- get_successful_and_complete_trades(trades = trades)
-  trades <- get_ether_token_trades(trades = trades,
-                                   token_column1 = quote(tokenBuy),
-                                   token_column2 = quote(tokenSell))
-  trades <- merge_EtherDelta_trades_with_daily_usd_price(trades = trades,
-                                                         price_file_csv = EtherDollarPrice_file)
-  
-  # filter self trades
-  l <- filter_self_trades(trades = trades,
-                          save = TRUE,
-                          folder = output_folder)
-  self_trades <- l[["self_trades"]]
-  self_trades_summary <- summarize_self_trades(self_trades = self_trades,
-                                               save = TRUE,
-                                               folder = output_folder)
-  trades <- l[["non_self_trades"]]
-  
-  # detect SCC
-  trades <- add_trader_hashes(trades = trades)
-  scc_dt <- detect_scc_for_tokens_layered(trades = trades, save = TRUE, folder = output_folder)
-  
-  relevant_scc_ids <- get_relevant_scc_by_threshold(scc_dt, scc_threshold_rank)
-  wash_trades_multiple_passes <- detect_and_label_wash_trades_for_scc_using_multiple_passes(trades = trades,
-                                                                                            relevant_scc = relevant_scc_ids,
-                                                                                            window_sizes_in_seconds = wash_window_sizes_seconds,
-                                                                                            ether = wash_trade_detection_ether,
-                                                                                            margin = wash_trade_detection_margin,
-                                                                                            save = TRUE,
-                                                                                            folder = output_folder)
-  trades_labeled <- wash_trades_multiple_passes[[2]]
-  wash_trades_multiple_passes <- wash_trades_multiple_passes[[1]]
-  wash_trades_multiple_passes_summary <- get_summary_of_wash_trades_per_scc_and_timewindow(wash_trades = wash_trades_multiple_passes,
-                                                                                           window_size_name = "multiple_windows",
-                                                                                           multiple_passes = TRUE,
-                                                                                           save = TRUE,
-                                                                                           folder = output_folder)
-  
-  # get address clusters
-  get_address_clusters(trades = trades,
-                       scc_ids = relevant_scc_ids,
-                       save = TRUE,
-                       folder = output_folder)
-  
-  return()
-}
-
-
-
 call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/test.csv",
                                       output_folder = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/output_PREPARED",
                                       scc_threshold_rank = 100,
@@ -824,6 +702,10 @@ call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_as
   
   invisible(NULL)
 }
+
+
+
+# call_HyperLiquid_pipeline(Prepared_file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/AVAX_compatible_trades.csv")
 
 
 
