@@ -82,6 +82,8 @@ def main():
             logger.info(f"[{token}] Prepared compatible CSV at {prepared_csv}")
             run_r_pipeline(prepared_csv, token)
 
+            os.remove(prepared_csv)
+
         except Exception as e:
             logger.exception(f"[{token}] Error during processing: {e}")
 

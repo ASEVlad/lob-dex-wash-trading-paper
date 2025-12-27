@@ -336,13 +336,6 @@ detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, r
   if (length(relevant_scc) == 0) {
     message("No relevant SCCs found. Skipping wash-trade detection.")
     trades$wash_label <- FALSE
-    
-    if (save) {
-      filename <- gsub("\\..*", "", filename)
-      save(list(), file = paste0(folder, "/", filename, ".RData"))
-      fwrite(trades, file = paste0(folder, "/trades_labeled.csv"))
-    }
-    
     return(list(wash_trades = list(), trades = trades))
   }
   
