@@ -332,6 +332,20 @@ detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, r
   # run for all given window sizes
   window_size_count <- length(window_sizes_in_seconds)
   relevant_scc_count <- length(relevant_scc)
+  
+  if (length(relevant_scc) == 0) {
+    message("No relevant SCCs found. Skipping wash-trade detection.")
+    trades$wash_label <- FALSE
+    
+    if (save) {
+      filename <- gsub("\\..*", "", filename)
+      save(list(), file = paste0(folder, "/", filename, ".RData"))
+      fwrite(trades, file = paste0(folder, "/trades_labeled.csv"))
+    }
+    
+    return(list(wash_trades = list(), trades = trades))
+  }
+  
   pb <- txtProgressBar(min = 0, max = window_size_count*relevant_scc_count, style = 3)
   for (window_size_index in 1:length(window_sizes_in_seconds)) {
     window_size <- window_sizes_in_seconds[window_size_index]
@@ -579,13 +593,13 @@ call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_as
   invisible(NULL)
 }
 
-call_HyperLiquid_pipeline(
- Prepared_file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/AVAX_test_compatible_trades.csv",
- output_folder = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/test_PREPARED",
- scc_threshold_rank = 100,
- wash_trade_detection_margin = 0.01,   # << paper’s tighter margin
- wash_window_sizes_seconds = c(3600, 86400, 604800)
-)
+# call_HyperLiquid_pipeline(
+#  Prepared_file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/AVAX_test_compatible_trades.csv",
+#  output_folder = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/test_PREPARED",
+#  scc_threshold_rank = 100,
+#  wash_trade_detection_margin = 0.01,   # << paper’s tighter margin
+#  wash_window_sizes_seconds = c(3600, 86400, 604800)
+# )
 
 # call_HyperLiquid_pipeline(Prepared_file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/AVAX_compatible_trades.csv")
 
