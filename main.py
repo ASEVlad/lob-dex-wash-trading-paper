@@ -67,9 +67,6 @@ def main():
 
     for token in tokens:
         try:
-            if token != "AVAX":
-                continue
-
             logger.info(f"=== Processing token: {token} ===")
 
             store = CoinDataStore(token, engine="fastparquet")
@@ -80,10 +77,6 @@ def main():
             prepare_postmerge_csv(
                 df_trades,
                 out_csv=str(prepared_csv),
-                token_id=token,
-                token_usd_const=TOKEN_USD_CONST,
-                eth_usd_const=ETH_USD_CONST,
-                price_is_token_in_eth=PRICE_IS_TOKEN_IN_ETH,
             )
 
             logger.info(f"[{token}] Prepared compatible CSV at {prepared_csv}")

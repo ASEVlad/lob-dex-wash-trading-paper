@@ -13,16 +13,19 @@ library(parallel)
 library(hash)
 
 # SOURCE NECESSARY FILES
-sourceCpp(file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/volume_matching_enhanced.cpp")
+# setwd("/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper")
+HOME_DIR <- normalizePath(".")
+sourceCpp("volume_matching_enhanced.cpp")
+
+
+
 
 # GLOBAL CONSTANTS AND VARIABLES
-global_ether_id <- "0x0000000000000000000000000000000000000000"
 global_max_hash_env_size <- 49000
 global_hash_env_names <- list()
 global_inv_hash_env_names <- list()
 global_num_hash_envs <- 0
 global_num_scc <- 0
-global_trader_hashes <- data.table(trader_address = character(), trader_id = character())
 
 global_scc_traders_map <- hash()
 
@@ -35,130 +38,11 @@ get_hash <- Vectorize(get, vectorize.args = "x")
 
 
 #### PREPARE TRADES ####
-
-load_trades <- function(file_csv = "data/IDEXTradesNew_realAmounts.csv") {
+load_trades <- function(file_csv) {
   trades <- fread(file = file_csv)
   print(paste0("Info: read file ", file_csv, " as data.table with ", nrow(trades), " rows."))
   print(paste0("Columns are: ", paste(colnames(trades), collapse = ", ")))
   return(trades)
-}
-
-get_successful_and_complete_trades <- function(trades, status_column, status_success) {
-  n <- nrow(trades)
-  if(!missing(status_column) & !missing(status_success)) {
-    trades <- trades[eval(status_column) == status_success]
-  }
-  trades <- trades[complete.cases(trades)]
-  print(paste0("Info: dropped ", (n - nrow(trades)), " rows, which had missing/unsuccessful status, ",
-               "or any missing values. ", nrow(trades), " rows remaining."))
-  return(trades)
-}
-
-# get trades where Ether and some token were traded
-# (drops trades between two tokens and trades where tokenBuy and tokenSell are the same)
-get_ether_token_trades <- function(trades, token_column1, token_column2) {
-  n <- nrow(trades)
-  trades <- trades[eval(token_column1) == global_ether_id | eval(token_column2) == global_ether_id]
-  trades <- trades[eval(token_column1) != eval(token_column2)]
-  print(paste0("Info: dropped ", (n - nrow(trades)), " rows, which are trades between two tokens or ",
-               "trades between the same currency. ", nrow(trades), " rows remaining."))
-  return(trades)
-}
-
-# assumption: file must have three columns in order: date, timestamp, USD value; date must be of format "%m/%d/%Y"
-# assumption: trades must have columns: timestamp, tokenBuy, tokenSell, amountBoughtReal, amountSoldReal
-# (order amounts are dropped)
-# assumption: no token-token-trade (they are dropped otherwise)
-merge_trades_with_daily_usd_price <- function(trades, price_file_csv = "data/EtherDollarPrice.csv") {
-  
-  # read file
-  ether_dollar <- fread(file = price_file_csv)
-  colnames(ether_dollar) <- c("date", "timestamp", "dollar")
-  ether_dollar$date <- as.Date(ether_dollar$date, format = "%m/%d/%Y")
-  
-  ## add timestamp of date to trades for merging
-  # get greatest Dollar timestamp that is smaller-equal than the smallest trades timestamp
-  min_trades_timestamp <- min(trades$timestamp)
-  min_dollar_timestamp <- ether_dollar[timestamp <= min_trades_timestamp][order(timestamp)]
-  min_dollar_timestamp <- min_dollar_timestamp[nrow(min_dollar_timestamp)]$timestamp
-  # get smallest Dollar timestamp that is greater-equal than the greatest trades timestamp
-  max_trades_timestamp <- max(trades$timestamp)
-  max_dollar_timestamp <- ether_dollar[timestamp >= max_trades_timestamp]
-  max_dollar_timestamp <- max_dollar_timestamp[1]$timestamp
-  # get left sides of intervals
-  intervals_left <- ether_dollar[timestamp >= min_dollar_timestamp & timestamp <= max_dollar_timestamp]$timestamp
-  # cut IDEX timestamps based on intervals
-  trades$cut <- cut(trades$timestamp, breaks = intervals_left, labels = intervals_left[1:(length(intervals_left)-1)],
-                    include.lowest = T, right = F, dig.lab = 15)
-  trades$cut <- as.numeric(levels(trades$cut))[trades$cut]
-  
-  # merge buy eth trades with eth-dollar price
-  trades_buyeth <- trades[tokenBuy == global_ether_id]
-  trades_buyeth <- merge(trades_buyeth, ether_dollar[, .(timestamp, eth_price = dollar, date)], 
-                         by.x = "cut", by.y = "timestamp")
-  trades_buyeth <- trades_buyeth[, .(date, cut, blockNumber, timestamp, transactionHash,
-                                     eth_buyer = maker, eth_seller = taker, ether = tokenBuy, token = tokenSell, 
-                                     trade_amount_eth = amountBoughtReal, trade_amount_dollar = amountBoughtReal * eth_price,
-                                     trade_amount_token = amountSoldReal, token_price_in_eth = 1/price,
-                                     fee_eth_buyer = feeMake, fee_eth_seller = feeTake)]
-  # merge sell eth trades with eth-dollar price
-  trades_selleth <- trades[tokenSell == global_ether_id]
-  trades_selleth <- merge(trades_selleth, ether_dollar[, .(timestamp, eth_price = dollar, date)], 
-                          by.x = "cut", by.y = "timestamp")
-  trades_selleth <- trades_selleth[, .(date, cut, blockNumber, timestamp, transactionHash,
-                                       eth_buyer = taker, eth_seller = maker, ether = tokenSell, token = tokenBuy,
-                                       trade_amount_eth = amountSoldReal, trade_amount_dollar = amountSoldReal * eth_price,
-                                       trade_amount_token = amountBoughtReal, token_price_in_eth = price,
-                                       fee_eth_buyer = feeTake, fee_eth_seller = feeMake)]
-  # bind
-  trades_eth <- rbindlist(list(trades_buyeth, trades_selleth))[order(blockNumber)]
-  
-  return(trades_eth)
-}
-
-merge_EtherDelta_trades_with_daily_usd_price <- function(trades, price_file_csv = "data/EtherDollarPrice.csv") {
-  
-  # read file
-  ether_dollar <- fread(file = price_file_csv)
-  colnames(ether_dollar) <- c("date", "timestamp", "dollar")
-  ether_dollar$date <- as.Date(ether_dollar$date, format = "%m/%d/%Y")
-  
-  ## add timestamp of date to trades for merging
-  # get greatest Dollar timestamp that is smaller-equal than the smallest trades timestamp
-  min_trades_timestamp <- min(trades$timestamp)
-  min_dollar_timestamp <- ether_dollar[timestamp <= min_trades_timestamp][order(timestamp)]
-  min_dollar_timestamp <- min_dollar_timestamp[nrow(min_dollar_timestamp)]$timestamp
-  # get smallest Dollar timestamp that is greater-equal than the greatest trades timestamp
-  max_trades_timestamp <- max(trades$timestamp)
-  max_dollar_timestamp <- ether_dollar[timestamp >= max_trades_timestamp]
-  max_dollar_timestamp <- max_dollar_timestamp[1]$timestamp
-  # get left sides of intervals
-  intervals_left <- ether_dollar[timestamp >= min_dollar_timestamp & timestamp <= max_dollar_timestamp]$timestamp
-  # cut IDEX timestamps based on intervals
-  trades$cut <- cut(trades$timestamp, breaks = intervals_left, labels = intervals_left[1:(length(intervals_left)-1)],
-                    include.lowest = T, right = F, dig.lab = 15)
-  trades$cut <- as.numeric(levels(trades$cut))[trades$cut]
-  
-  # merge buy eth trades with eth-dollar price
-  trades_buyeth <- trades[tokenBuy == global_ether_id]
-  trades_buyeth <- merge(trades_buyeth, ether_dollar[, .(timestamp, eth_price = dollar, date)], 
-                         by.x = "cut", by.y = "timestamp")
-  trades_buyeth <- trades_buyeth[, .(date, cut, blockNumber, timestamp, transactionHash,
-                                     eth_buyer = maker, eth_seller = taker, ether = tokenBuy, token = tokenSell, 
-                                     trade_amount_eth = amountBoughtReal, trade_amount_dollar = amountBoughtReal * eth_price,
-                                     trade_amount_token = amountSoldReal, token_price_in_eth = 1/price)]
-  # merge sell eth trades with eth-dollar price
-  trades_selleth <- trades[tokenSell == global_ether_id]
-  trades_selleth <- merge(trades_selleth, ether_dollar[, .(timestamp, eth_price = dollar, date)], 
-                          by.x = "cut", by.y = "timestamp")
-  trades_selleth <- trades_selleth[, .(date, cut, blockNumber, timestamp, transactionHash,
-                                       eth_buyer = taker, eth_seller = maker, ether = tokenSell, token = tokenBuy,
-                                       trade_amount_eth = amountSoldReal, trade_amount_dollar = amountSoldReal * eth_price,
-                                       trade_amount_token = amountBoughtReal, token_price_in_eth = price)]
-  # bind
-  trades_eth <- rbindlist(list(trades_buyeth, trades_selleth))[order(blockNumber)]
-  
-  return(trades_eth)
 }
 
 
@@ -166,8 +50,8 @@ merge_EtherDelta_trades_with_daily_usd_price <- function(trades, price_file_csv 
 #### SELF TRADES ####
 
 filter_self_trades <- function(trades, save = TRUE, folder = "output", filename = "self_trades") {
-  self_trades <- trades[eth_buyer == eth_seller]
-  non_self_trades <- trades[eth_buyer != eth_seller]
+  self_trades <- trades[buyer_id == seller_id]
+  non_self_trades <- trades[buyer_id != seller_id]
   print(paste0("Info: filtered ", nrow(self_trades), " self-trades. ",
                nrow(non_self_trades), " non-self-trades remaining."))
   if(save) {
@@ -181,9 +65,9 @@ filter_self_trades <- function(trades, save = TRUE, folder = "output", filename 
 
 summarize_self_trades <- function(self_trades, save = TRUE, folder = "output", 
                                   filename = "self_trades_summary") {
-  summary <- self_trades[, .(tx_count = .N, tx_sum_eth = sum(trade_amount_eth), tx_sum_dollar = sum(trade_amount_dollar), 
-                             tx_sum_token = sum(trade_amount_token), start_date = min(.SD$date), end_date = max(.SD$date)),
-                         by = .(trader = eth_buyer, token)]
+  summary <- self_trades[, .(tx_count = .N, tx_sum_dollar = sum(trade_amount_dollar), tx_sum_token = sum(trade_amount_token), 
+                             start_date = min(.SD$date), end_date = max(.SD$date)),
+                         by = .(trader = buyer_id)]
   if(save) {
     # remove file type if given
     filename <- gsub("\\..*", "", filename)
@@ -196,32 +80,6 @@ summarize_self_trades <- function(self_trades, save = TRUE, folder = "output",
 
 
 #### DETECT SCC PER TIME WINDOW ####
-
-# assumptions:
-# - trades columns: eth_buyer, eth_seller
-add_trader_hashes <- function(trades) {
-  # if there are no trader hashes yet, add all traders of the given trades
-  if(nrow(global_trader_hashes) == 0) {
-    num_traders <- length(unique(c(unique(trades$eth_buyer), unique(trades$eth_seller))))
-    global_trader_hashes <<- data.table(trader_address = sort(unique(c(trades$eth_buyer, trades$eth_seller))),
-                                        trader_id = as.character(1:num_traders))
-  } else { # add additional traders
-    additional_traders <- setdiff(x = sort(unique(c(trades$eth_buyer, trades$eth_seller))),
-                                  y = global_trader_hashes$trader_address)
-    if(length(additional_traders) != 0) {
-      n_old <- nrow(global_trader_hashes)
-      n_new <- n_old + length(additional_traders)
-      global_trader_hashes <<- rbindlist(list(global_trader_hashes,
-                                              data.table(trader_address = additional_traders, 
-                                                         trader_id = seq(n_old+1, n_new, 1))))
-    }
-  }
-  trades <- merge(trades, global_trader_hashes[, .(eth_buyer_id = trader_id, trader_address)], 
-                  by.x = "eth_buyer", by.y = "trader_address")
-  trades <- merge(trades, global_trader_hashes[, .(eth_seller_id = trader_id, trader_address)], 
-                  by.x = "eth_seller", by.y = "trader_address")[order(timestamp)]
-  return(trades)
-}
 
 # creates hash environments that are bound by (assigned to) the Global Env
 create_scc_hash_environment <- function() {
@@ -243,11 +101,11 @@ create_scc_hash_environment <- function() {
 
 # for given window trades, build graph and detect strongly connected components
 # assumptions:
-# - trades column names: eth_buyer_id, eth_seller_id, trade_amount_eth
+# - trades column names: buyer_id, seller_id, trade_amount_eth
 get_scc <- function(window_trades) {
   
   # create graph for window trades
-  window_g <- graph.data.frame(d = unique(window_trades[, .(eth_seller_id, eth_buyer_id)]), directed = TRUE)
+  window_g <- graph.data.frame(d = unique(window_trades[, .(seller_id, buyer_id)]), directed = TRUE)
   window_scc <- components(window_g, mode = "strong")
   interesting_scc_ids <- unique(window_scc$membership[window_scc$membership %in% which(window_scc$csize > 1)])
   # result vectors:
@@ -264,7 +122,7 @@ get_scc <- function(window_trades) {
     # add number of traders to result set
     num_traders <- c(num_traders, length(named_vertices))
     # get trades belonging to this SCC
-    tx <- window_trades[eth_buyer_id %in% named_vertices & eth_seller_id %in% named_vertices]
+    tx <- window_trades[buyer_id %in% named_vertices & seller_id %in% named_vertices]
     # add number of trades to result set
     tx_count <- c(tx_count, nrow(tx))
     # add total trade amount to result set
@@ -314,60 +172,90 @@ get_scc <- function(window_trades) {
   return(list(scc_hashes, num_traders, tx_count, tx_sum_eth, tx_sum_dollar))
 }
 
-# assumption: tumbling window
-detect_scc_for_token_and_time_window <- function(trades, window_size_in_seconds, window_size_name, window_start = NULL,
-                                                 save = TRUE, folder = "output", filename = "scc") {
-  # if window start is not given, take start of first day of given trades
-  if(missing(window_start)) {
-    window_start <- min(trades$cut)
-  }
-  # breaks from start to last timestamp, by given steps in seconds
-  breaks <- seqlast(window_start, max(trades$timestamp), window_size_in_seconds)
-  # group trades by token and time windows
-  # (time windows are defined as [break, next_break) )
-  token_scc <- trades[, get_scc(.SD), by = .(token,
-                                             bins = cut(timestamp, breaks, right = F, include.lowest = T, dig.lab = 12))]
-  colnames(token_scc) <- c("token", "time", "scc_hash", "num_traders", "tx_count", "tx_sum_eth", "tx_sum_dollar")
+# assumption: tumbling window, single token
+detect_scc_for_time_window <- function(
+    trades,
+    window_size_in_seconds,
+    window_size_name,
+    window_start = NULL,
+    save = TRUE,
+    folder = "output",
+    filename = "scc"
+) {
   
-  if(save) {
-    # remove file type
-    filename <- gsub("\\..*", "", filename)
-    fwrite(token_scc, file = paste0(folder, "/", filename, "_", window_size_name, ".csv"))
+  # if window start is not given, take first timestamp
+  if (missing(window_start)) {
+    window_start <- min(trades$timestamp)
   }
-  return(token_scc)
+  
+  # construct tumbling windows
+  breaks <- seqlast(
+    window_start,
+    max(trades$timestamp),
+    window_size_in_seconds
+  )
+  
+  # group trades only by time window
+  time_scc <- trades[
+    ,
+    get_scc(.SD),
+    by = .(
+      time = cut(
+        timestamp,
+        breaks,
+        right = FALSE,
+        include.lowest = TRUE,
+        dig.lab = 12
+      )
+    )
+  ]
+  
+  # rename columns (remove token)
+  colnames(time_scc) <- c(
+    "time",
+    "scc_hash",
+    "num_traders",
+    "tx_count",
+    "tx_sum_token",
+    "tx_sum_dollar"
+  )
+  
+  if (save) {
+    filename <- gsub("\\..*", "", filename)
+    fwrite(
+      time_scc,
+      file = paste0(folder, "/", filename, "_", window_size_name, ".csv")
+    )
+  }
+  
+  return(time_scc)
 }
 
+
 detect_scc_for_tokens_layered <- function(trades, save = TRUE, folder = "output", filename = "scc") {
-  
-  tokenVector <- unique(trades$token)
   result <- c()
   
-  pb <- txtProgressBar(min = 0, max = length(tokenVector), style = 3)
-  for (token_index in 1:length(tokenVector)) {
-    tokenName <- tokenVector[token_index]
-    g <- graph_from_data_frame(trades[token == tokenName, list(eth_buyer_id, eth_seller_id, weight=1)])
-    gs <- simplify(g, edge.attr.comb = length)
-    
-    while(vcount(gs) > 0) {
-      comps <- components(gs, "strong")
-      ids_larger_one <- which(comps$csize > 1)
-      if(length(ids_larger_one) == 0) {
-        gs <- delete_vertices(gs, V(gs))
-        next
-      }
-      for(c_id in seq(1, length(ids_larger_one))) {
-        c_v_ids <- which(comps$membership %in% ids_larger_one[c_id])
-        c_v_names <- vertex_attr(gs, "name", c_v_ids)
-        sorted_members <- sort(c_v_names)
-        c_hash <- paste(digest::digest2int(paste0(sorted_members, collapse=",")))
-        global_scc_traders_map[[c_hash]] <- sorted_members
-        result <- c(result, c_hash)
-      }
-      edge_attr(gs, "weight") <- edge_attr(gs, "weight") - 1
-      gs <- delete_edges(gs, which(edge_attr(gs, "weight") == 0))
-      gs <- delete_vertices(gs, degree(gs)==0)
+  g <- graph_from_data_frame(trades[, list(buyer_id, seller_id, weight=1)])
+  gs <- simplify(g, edge.attr.comb = length)
+  
+  while(vcount(gs) > 0) {
+    comps <- components(gs, "strong")
+    ids_larger_one <- which(comps$csize > 1)
+    if(length(ids_larger_one) == 0) {
+      gs <- delete_vertices(gs, V(gs))
+      next
     }
-    setTxtProgressBar(pb, token_index)
+    for(c_id in seq(1, length(ids_larger_one))) {
+      c_v_ids <- which(comps$membership %in% ids_larger_one[c_id])
+      c_v_names <- vertex_attr(gs, "name", c_v_ids)
+      sorted_members <- sort(c_v_names)
+      c_hash <- paste(digest::digest2int(paste0(sorted_members, collapse=",")))
+      global_scc_traders_map[[c_hash]] <- sorted_members
+      result <- c(result, c_hash)
+    }
+    edge_attr(gs, "weight") <- edge_attr(gs, "weight") - 1
+    gs <- delete_edges(gs, which(edge_attr(gs, "weight") == 0))
+    gs <- delete_vertices(gs, degree(gs)==0)
   }
   scc_dt <- data.table(scc_hash=result)[, list(occurrence = .N), by=scc_hash]
   scc_dt$num_traders <- sapply(scc_dt$scc_hash, function(x) {length(global_scc_traders_map[[x]])})
@@ -428,7 +316,7 @@ get_relevant_scc_by_threshold <- function(scc_dt, threshold) {
   return(relevant$scc_hash)
 }
 
-detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, relevant_scc, window_sizes_in_seconds, window_start, ether = TRUE, margin,
+detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, relevant_scc, window_sizes_in_seconds, window_start, margin,
                                                                        save = TRUE, folder = "output", filename = "wash_trades_multiple_windows") {
   # copy trades in order to label them
   print(paste("Starting wash trade labeling with", length(window_sizes_in_seconds), "passes."))
@@ -436,7 +324,7 @@ detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, r
   
   # if window start is not given, take start of first day of given trades
   if(missing(window_start)) {
-    window_start <- min(trades$cut)
+    window_start <- min(trades$timestamp)
   }
   
   wash_trades <- list()
@@ -455,8 +343,8 @@ detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, r
       scc.id <- relevant_scc[scc.id.index]
       scc.traders <- global_scc_traders_map[[scc.id]]
       # get trades within scc that have not been labeled as wash trades yet
-      scc.trades <- trades[eth_seller_id %in% scc.traders & eth_buyer_id %in% scc.traders &
-                             (wash_label == FALSE | is.na(wash_label))][order(cut)]
+      scc.trades <- trades[seller_id %in% scc.traders & buyer_id %in% scc.traders &
+                             (wash_label == FALSE | is.na(wash_label))][order(timestamp)]
       
       if(nrow(scc.trades) == 0) {
         wash_trades[[scc.id]][[as.character(window_size)]] <- list()
@@ -466,20 +354,17 @@ detect_and_label_wash_trades_for_scc_using_multiple_passes <- function(trades, r
       # label these trades as FALSE in original trade set to indicate they have been checked
       trades[transactionHash %in% scc.trades$transactionHash]$wash_label <- FALSE
       # prepare trades
-      if (ether) {
-        temp_trades <- scc.trades[, .(transactionHash, token, date, timestamp, buyer = eth_buyer, seller = eth_seller, 
-                                      amount = trade_amount_eth, trade_amount_dollar, wash_label)]
-      } else {
-        temp_trades <- scc.trades[, .(transactionHash, token, date, timestamp, buyer = eth_seller, seller = eth_buyer, 
+      temp_trades <- scc.trades[, .(transactionHash, timestamp, buyer = seller_id, seller = buyer_id, 
                                       amount = trade_amount_token, trade_amount_dollar, wash_label)]
-      }
-      # split trades by token and given time window size and run wash trade detect function
-      # (time windows are defined as [break, next_break) using right=F and include.lowest=T)
-      temp_trades_per_token_and_window <- split(temp_trades, list(temp_trades$token, 
-                                                                  cut(temp_trades$timestamp, breaks, right = F, include.lowest = T, dig.lab = 12)), 
-                                                drop = TRUE)
       
-      scc.wash_trades_all <- mclapply(temp_trades_per_token_and_window,
+      # split trades by  given time window size and run wash trade detect function
+      # (time windows are defined as [break, next_break) using right=F and include.lowest=T)
+      temp_trades_per_window <- split(temp_trades,
+                                      cut(temp_trades$timestamp, breaks, right = FALSE, include.lowest = TRUE, dig.lab = 12),
+                                      drop = TRUE
+      )
+      
+      scc.wash_trades_all <- mclapply(temp_trades_per_window,
                                     FUN = detect_label_wash_trades_all_windows,
                                     margin = margin,
                                     mc.cores = 14)
@@ -505,9 +390,7 @@ get_summary_of_wash_trades_per_scc_and_timewindow <- function(wash_trades, windo
                                                               save = TRUE, folder = "output", filename = "wash_trades_summary") {
   # define result data.table
   print("Info: producing wash trading summary...")
-  wash_trades_dt <- data.table(scc_hash = character(),
-                               token = character(),
-                               window_size = character(),
+  wash_trades_dt <- data.table(window_size = character(),
                                time = character(),
                                num_wash_trades = numeric(),
                                num_trades = numeric(),
@@ -525,7 +408,6 @@ get_summary_of_wash_trades_per_scc_and_timewindow <- function(wash_trades, windo
         for (w in seq_len(length(wash_trades[[scc]][[window_size]]))) {
           # list names contain token and time window
           temp <- strsplit(names(wash_trades[[scc]][[window_size]])[w], split = "\\.")[[1]]
-          token <- temp[1]
           window <- temp[2]
           num_wash <- nrow(wash_trades[[scc]][[window_size]][[w]][wash_label == TRUE])
           num_all <- nrow(wash_trades[[scc]][[window_size]][[w]])
@@ -534,7 +416,7 @@ get_summary_of_wash_trades_per_scc_and_timewindow <- function(wash_trades, windo
           amount_dollar_wash <- sum(wash_trades[[scc]][[window_size]][[w]][wash_label == TRUE]$trade_amount_dollar)
           amount_dollar_all <- sum(wash_trades[[scc]][[window_size]][[w]]$trade_amount_dollar)
           wash_trades_dt <- rbindlist(list(wash_trades_dt, 
-                                           list(scc, token, window_size, window, num_wash, num_all, amount_wash, 
+                                           list(window_size, window, num_wash, num_all, amount_wash, 
                                                 amount_all, amount_dollar_wash, amount_dollar_all)))
         }
       }
@@ -548,7 +430,6 @@ get_summary_of_wash_trades_per_scc_and_timewindow <- function(wash_trades, windo
       for (w in seq_len(length(wash_trades[[scc]]))) {
         # list names contain token and time window
         temp <- strsplit(names(wash_trades[[scc]])[w], split = "\\.")[[1]]
-        token <- temp[1]
         window <- temp[2]
         num_wash <- nrow(wash_trades[[scc]][[w]][wash_label == TRUE])
         num_all <- nrow(wash_trades[[scc]][[w]])
@@ -557,7 +438,7 @@ get_summary_of_wash_trades_per_scc_and_timewindow <- function(wash_trades, windo
         amount_dollar_wash <- sum(wash_trades[[scc]][[w]][wash_label == TRUE]$trade_amount_dollar)
         amount_dollar_all <- sum(wash_trades[[scc]][[w]]$trade_amount_dollar)
         wash_trades_dt <- rbindlist(list(wash_trades_dt, 
-                                         list(scc, token, window, num_wash, num_all, amount_wash, 
+                                         list(window, num_wash, num_all, amount_wash, 
                                               amount_all, amount_dollar_wash, amount_dollar_all)))
       }
     }
@@ -605,9 +486,8 @@ get_address_clusters <- function(trades, scc_ids, save = TRUE, folder = "output"
   
   # for each SCC
   for (scc.id in scc_ids) {
-    scc.traders <- global_scc_traders_map[[scc.id]]
     # add to address clusters
-    address_clusters[[as.character(scc.id)]] <- global_trader_hashes[trader_id %in% scc.traders]$trader_address
+    address_clusters[[as.character(scc.id)]] <- global_scc_traders_map[[scc.id]]
   }
   # save file
   if (save) {
@@ -639,7 +519,6 @@ get_window_size_name <- function(seconds) {
 call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/test.csv",
                                       output_folder = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/output_PREPARED",
                                       scc_threshold_rank = 100,
-                                      wash_trade_detection_ether = FALSE,   # << we analyze TOKEN amounts
                                       wash_trade_detection_margin = 0.01,   # << paper’s tighter margin
                                       wash_window_sizes_seconds = c(3600, 86400, 604800)) {
   
@@ -649,9 +528,10 @@ call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_as
   trades <- load_trades(file_csv = Prepared_file)
   
   # Ensure essential columns exist (light sanity checks)
-  req <- c("timestamp","cut","blockNumber","transactionHash",
-           "eth_buyer","eth_seller","token",
-           "trade_amount_token","trade_amount_dollar")
+  req <- c("timestamp", "transactionHash",
+           "buyer_id","seller_id",
+           "trade_amount_token", "trade_amount_dollar")
+  
   if (!all(req %in% colnames(trades))) {
     stop(paste("Prepared file missing required columns. Need:", paste(req, collapse=", ")))
   }
@@ -662,21 +542,17 @@ call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_as
   self_trades_summary <- summarize_self_trades(self_trades = self_trades, save = TRUE, folder = output_folder)
   trades <- l[["non_self_trades"]]
   
-  # 3) Add trader IDs
-  trades <- add_trader_hashes(trades = trades)
-  
-  # 4) Layered SCC detection (Algorithm 1)
+  # 3) Layered SCC detection (Algorithm 1)
   scc_dt <- detect_scc_for_tokens_layered(trades = trades, save = TRUE, folder = output_folder)
   
-  # 5) Pick relevant SCCs by occurrence
+  # 4) Pick relevant SCCs by occurrence
   relevant_scc_ids <- get_relevant_scc_by_threshold(scc_dt, scc_threshold_rank)
   
-  # 6) Multi-pass wash labeling (Algorithm 2) — TOKEN amounts
+  # 5) Multi-pass wash labeling (Algorithm 2) — TOKEN amounts
   wash_trades_multiple_passes <- detect_and_label_wash_trades_for_scc_using_multiple_passes(
     trades = trades,
     relevant_scc = relevant_scc_ids,
     window_sizes_in_seconds = wash_window_sizes_seconds,
-    ether = wash_trade_detection_ether,   # FALSE ⇒ use trade_amount_token
     margin = wash_trade_detection_margin,
     save = TRUE,
     folder = output_folder
@@ -703,7 +579,13 @@ call_HyperLiquid_pipeline <- function(Prepared_file = "~/program_files/github_as
   invisible(NULL)
 }
 
-
+call_HyperLiquid_pipeline(
+ Prepared_file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/AVAX_test_compatible_trades.csv",
+ output_folder = "~/program_files/github_asevlad/lob-dex-wash-trading-paper/test_PREPARED",
+ scc_threshold_rank = 100,
+ wash_trade_detection_margin = 0.01,   # << paper’s tighter margin
+ wash_window_sizes_seconds = c(3600, 86400, 604800)
+)
 
 # call_HyperLiquid_pipeline(Prepared_file = "/home/asevlad/program_files/github_asevlad/lob-dex-wash-trading-paper/AVAX_compatible_trades.csv")
 
@@ -746,13 +628,11 @@ if (!is.null(opt$washwindowsizesecondspass3)) {
   wash_window_sizes_args <- c(wash_window_sizes_args, opt$washwindowsizesecondspass3)
 }
 
-
 # call pipeline
 if (opt$dex == "HyperLiquid") {
   call_HyperLiquid_pipeline(Prepared_file = opt$trades,
                             output_folder = opt$output,
                             scc_threshold_rank = opt$sccthresholdrank,
-                            wash_trade_detection_ether = opt$washdetectionether,
                             wash_trade_detection_margin = opt$margin,
                             wash_window_sizes_seconds = wash_window_sizes_args)
 }
